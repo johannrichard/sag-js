@@ -3,7 +3,7 @@
     return Object.prototype.toString.call(arg) == '[object Array]';
   };
 
-  exports.server = function(host, port, user, pass) {
+  exports.server = function(host, port, user, pass, jsonp) {
     var http;
     var xmlHTTP;
 
@@ -14,6 +14,8 @@
     var staleDefault = false;
     var globalCookies = {};
     var pathPrefix = '';
+
+    var useJSONP = !!jsonp;
 
     function throwIfNoCurrDB() {
       if(!currDatabase) {
@@ -54,6 +56,9 @@
 
     function procPacket(method, path, data, headers, callback) {
       var cookieStr = '';
+
+      var headTag = document.head || document.getElementByTagName('head')[0] || document.documentElement;
+      var scriptTag;
 
       headers = headers || {};
 
@@ -122,35 +127,68 @@
         req.end();
       }
       else if(xmlHTTP) {
-        // Browser xhr magik
-        xmlHTTP.onreadystatechange = function() {
-          if(this.readyState === 4 && this.status > 0) {
-            var headers = {};
-            var rawHeaders = this.getAllResponseHeaders().split('\n');
+        //browser jsonp via <script> and ?callback
+        if(useJSONP) {
+          if(!headTag) {
+            throw 'Trying to do JSONP <script> tag in a non-browser.';
+          }
 
-            for(var i in rawHeaders) {
-              if(rawHeaders.hasOwnProperty(i)) {
-                rawHeaders[i] = rawHeaders[i].split(': ');
+          if(!window.bwah) {
+            window.bwah = function(resp) {
+              console.log(resp);
+            }
+          }
 
-                if(rawHeaders[i][1]) {
-                  headers[rawHeaders[i][0]] = rawHeaders[i][1];
-                }
+          path += ((path.indexOf('?') > 0) ? '&' : '?') + 'callback=bwah';
+
+          scriptTag = document.createElement('script');
+          scriptTag.async = 'async';
+          scriptTag.src = 'http://' + host + ':' + port + path;
+
+          scriptTag.onload = scriptTag.onreadystatechange = function(bwah, isAbort) {
+            if(isAbort || !scriptTag.readyState || /loaded|complete/.test(scriptTag.readyState)) {
+              scriptTag.onload = scriptTag.onreadystatechange = null;
+
+              if(headTag && scriptTag.parentNode) {
+                headTag.removeChild(scriptTag);
               }
             }
+          };
 
-            onResponse(this.status, headers, this.response, callback);
-          }
-        };
-
-        xmlHTTP.open(method, 'http://' + host + ':' + port + path);
-
-        for(var k in headers) {
-          if(headers.hasOwnProperty(k)) {
-            xmlHTTP.setRequestHeader(k, headers[k]);
-          }
+          headTag.insertBefore(scriptTag, headTag.firstChild);
         }
+        else {
+          // Browser xhr magik
+          xmlHTTP.onreadystatechange = function() {
+            if(this.readyState === 4 && this.status > 0) {
+              var headers = {};
+              var rawHeaders = this.getAllResponseHeaders().split('\n');
 
-        xmlHTTP.send(data || null);
+              for(var i in rawHeaders) {
+                if(rawHeaders.hasOwnProperty(i)) {
+                  rawHeaders[i] = rawHeaders[i].split(': ');
+
+                  if(rawHeaders[i][1]) {
+                    headers[rawHeaders[i][0]] = rawHeaders[i][1];
+                  }
+                }
+              }
+
+              onResponse(this.status, headers, this.response, callback);
+            }
+          };
+
+
+          xmlHTTP.open(method, 'http://' + host + ':' + port + path);
+
+          for(var k in headers) {
+            if(headers.hasOwnProperty(k)) {
+              xmlHTTP.setRequestHeader(k, headers[k]);
+            }
+          }
+
+          xmlHTTP.send(data || null);
+        }
       }
       else {
         throw 'coder fail';
